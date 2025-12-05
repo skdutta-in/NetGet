@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>NetGet</title>
+<link rel="icon" href="Favicon.png" type="image/x-icon">
+
+<!-- Leaflet for map -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+  :root{
+    --bg:#071024; --card:#0f1724; --muted:#9aa6b2; --accent:#4fd1c5; --good:#22c55e; --warn:#f59e0b; --bad:#f56565;
+  }
+  html,body { height:100%; margin:0; font-family:Inter,Arial, sans-serif; background: radial-gradient(circle at 10% 10%, #05233b 0%, var(--bg) 30%); color:#e6eef6; }
+  .wrap { max-width:1100px; margin:18px auto; padding:18px; }
+  header { display:flex; gap:12px; align-items:center; justify-content:space-between; margin-bottom:12px; }
+  h1 { margin:0; font-size:20px; color:var(--accent); }
+  .controls { display:flex; gap:8px; align-items:center; }
+  select, button { padding:8px 10px; border-radius:8px; border:1px solid rgba(255,255,255,0.06); background:linear-gradient(180deg, rgba(255,255,255,0.02), transparent); color:inherit; }
+  .grid { display:grid; grid-template-columns: 1fr 420px; gap:14px; align-items:start; }
+  .card { background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); border-radius:12px; padding:14px; box-shadow:0 6px 20px rgba(2,6,23,0.6); border:1px solid rgba(255,255,255,0.03); }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .label { font-size:13px; color:var(--muted); }
+  .value { font-weight:600; font-size:16px; }
+  #map { height:340px; border-radius:10px; overflow:hidden; }
+  .flag { width:34px; height:22px; border-radius:3px; box-shadow:0 2px 6px rgba(0,0,0,0.5); object-fit:cover; }
+  .stat { display:flex; justify-content:space-between; padding:8px 6px; border-radius:8px; background:rgba(255,255,255,0.01); margin-bottom:8px; }
+  .good { color:var(--good); } .warn { color:var(--warn); } .bad { color:var(--bad); }
+  footer { margin-top:12px; color:var(--muted); font-size:13px; text-align:center; }
+  small.hint { color:var(--muted); display:block; margin-top:6px; }
+  @media (max-width:920px){ .grid{ grid-template-columns: 1fr; } #map{ height:300px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1 id="title">NetGet - IP & Network Inspector</h1>
+      <small id="subtitle" class="hint">No logs. Client-side only. Uses public IP/location APIs from your browser.</small>
+    </div>
+
+    <div class="controls">
+      <label class="label" for="lang">Lang:</label>
+      <select id="lang" aria-label="Language selector">
+        <option value="en">English</option>
+        <option value="de">Deutsch</option>
+        <option value="es">Español</option>
+      </select>
+
+      <button id="btnRefresh">Refresh</button>
+      <button id="btnPDF">Export PDF</button>
+    </div>
+  </header>
+
+  <div class="grid">
+    <!-- left: details -->
+    <div>
+      <div class="card" id="card-main">
+        <div class="row" style="justify-content:space-between; align-items:center;">
+          <div>
+            <div class="label" id="lblIP">Public IP</div>
+            <div class="value" id="ipValue">Loading...</div>
+            <div class="label" id="lblProvider" style="margin-top:6px;">ISP</div>
+            <div id="ispValue" class="value">—</div>
+          </div>
+
+          <div style="text-align:right;">
+            <img id="flagImg" class="flag" alt="country flag" src="" style="display:none"/>
+            <div id="countryName" class="label" style="margin-top:6px">—</div>
+          </div>
+        </div>
+
+        <hr style="opacity:0.06; margin:12px 0;">
+
+        <div class="row">
+          <div style="flex:1;">
+            <div class="label" id="lblLocation">City / Region</div>
+            <div id="locValue" class="value">—</div>
+            <div class="label" id="lblCoords" style="margin-top:6px;">Coordinates</div>
+            <div id="coordValue" class="value">—</div>
+          </div>
+
+          <div style="width:220px;">
+            <div class="label" id="lblDevice">Device</div>
+            <div id="deviceValue" class="value">—</div>
+
+            <div class="label" id="lblBrowser" style="margin-top:6px">Browser</div>
+            <div id="browserValue" class="value">—</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" id="card-detect" style="margin-top:12px;">
+        <h3 id="lblVpn">VPN / Proxy</h3>
+        <div id="vpnValue" class="stat">Checking…</div>
+
+        <h3 id="lblThreat" style="margin-top:10px;">Threat Score</h3>
+        <div id="threatValue" class="stat">—</div>
+
+        <h3 id="lblSpeed" style="margin-top:10px;">Speed Test (approx.)</h3>
+        <div id="speedResult" class="stat">
+          <div><span class="label" id="lblDownload">Download</span></div>
+          <div><strong id="downloadKbps">—</strong></div>
+        </div>
+        <small class="hint" id="speedHint">Test runs a few downloads and estimates bandwidth — approximate only.</small>
+        <div style="margin-top:8px;">
+          <button id="btnSpeed">Run Speed Test</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- right: map -->
+    <div>
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <div class="label" id="lblMap">Map (city-level)</div>
+            <div class="hint" style="font-size:12px; color:var(--muted)">Zoomed to city by default (zoom 12).</div>
+          </div>
+          <div>
+            <button id="btnCenter">Center</button>
+            <button id="btnZoomIn">+</button>
+            <button id="btnZoomOut">−</button>
+          </div>
+        </div>
+        <div id="map" style="margin-top:8px;"></div>
+      </div>
+
+      <div class="card" style="margin-top:12px;">
+        <h3 id="lblExplain">How VPN detection & threat score work</h3>
+        <p id="explainText" class="label" style="line-height:1.4; margin:6px 0 0 0;">
+          Simple heuristics: proxy/hosting flags from the IP geolocation API, known cloud ASNs, and ISP/hosting indicators raise suspicion.
+          This is a heuristic only — not a guarantee.
+        </p>
+        <small class="hint">No external threat services are called — everything is computed locally from the geolocation response.</small>
+      </div>
+    </div>
+  </div>
+
+  <footer>
+    <div>No IP logging. All operations happen in your browser. Public API calls used for IP/location only.</div>
+  </footer>
+  <footer>Made with 💓 by Sanjib Kumar Dutta<br><br>A product from skdutta <br><img src="icon.png" width="100" style="float:centre"></footer>
+</div>
+
+<!-- Libraries: Leaflet, jspdf -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<script>
+/* =========================
+   Translations (simple)
+   ========================= */
+const i18n = {
+  en: {
+    title: "NetGet - IP & Network Inspector",
+    subtitle: "No logs. Client-side only. Uses public IP/location APIs from your browser.",
+    PublicIP: "Public IP",
+    ISP: "ISP",
+    CityRegion: "City / Region",
+    Coordinates: "Coordinates",
+    Device: "Device",
+    Browser: "Browser",
+    VPNProxy: "VPN / Proxy",
+    ThreatScore: "Threat Score",
+    Download: "Download",
+    RunSpeed: "Run Speed Test",
+    Map: "Map (city-level)",
+    Explain: "How VPN detection & threat score work",
+    speedHint: "Test runs a few downloads and estimates bandwidth — approximate only."
+  },
+  de: {
+    title: "Netget - IP & Netzwerk-Prüfer",
+    subtitle: "Keine Protokollierung. Nur im Browser. Öffentliche IP/Standort-APIs werden verwendet.",
+    PublicIP: "Öffentliche IP",
+    ISP: "Provider",
+    CityRegion: "Stadt / Region",
+    Coordinates: "Koordinaten",
+    Device: "Gerät",
+    Browser: "Browser",
+    VPNProxy: "VPN / Proxy",
+    ThreatScore: "Bedrohungs-Score",
+    Download: "Download",
+    RunSpeed: "Geschwindigkeitstest starten",
+    Map: "Karte (Stadt-Ebene)",
+    Explain: "Wie VPN-Erkennung & Bedrohungs-Score funktionieren",
+    speedHint: "Test lädt Dateien herunter und schätzt die Bandbreite — nur ungefähre Werte."
+  },
+  es: {
+    title: "NetGet - Inspector de IP y Red",
+    subtitle: "Sin registros. Solo cliente. Usa APIs públicas de IP/ubicación desde el navegador.",
+    PublicIP: "IP pública",
+    ISP: "Proveedor",
+    CityRegion: "Ciudad / Región",
+    Coordinates: "Coordenadas",
+    Device: "Dispositivo",
+    Browser: "Navegador",
+    VPNProxy: "VPN / Proxy",
+    ThreatScore: "Puntuación de Riesgo",
+    Download: "Descarga",
+    RunSpeed: "Iniciar prueba de velocidad",
+    Map: "Mapa (nivel ciudad)",
+    Explain: "Cómo funciona la detección de VPN & la puntuación de riesgo",
+    speedHint: "La prueba descarga algunos archivos y estima el ancho de banda — solo aproximado."
+  }
+};
+
+let lang = 'en';
+const t = k => i18n[lang][k] ?? i18n['en'][k];
+
+/* =========================
+   Small helpers
+   ========================= */
+function $(id){ return document.getElementById(id); }
+function setText(id, text){ const el=$(id); if(el) el.textContent=text; }
+
+/* =========================
+   Internationalize UI
+   ========================= */
+function applyTranslations(){
+  setText('title', t('title'));
+  setText('subtitle', t('subtitle'));
+  setText('lblIP', t('PublicIP'));
+  setText('lblProvider', t('ISP'));
+  setText('lblLocation', t('CityRegion'));
+  setText('lblCoords', t('Coordinates'));
+  setText('lblDevice', t('Device'));
+  setText('lblBrowser', t('Browser'));
+  setText('lblVpn', t('VPNProxy'));
+  setText('lblThreat', t('ThreatScore'));
+  setText('lblMap', t('Map'));
+  setText('lblExplain', t('Explain'));
+  setText('lblDownload', t('Download'));
+  setText('speedHint', t('speedHint'));
+  $('btnSpeed').textContent = t('RunSpeed');
+  $('btnPDF').textContent = lang === 'de' ? 'PDF exportieren' : (lang === 'es' ? 'Exportar PDF' : 'Export PDF');
+  $('btnRefresh').textContent = lang === 'de' ? 'Aktualisieren' : (lang === 'es' ? 'Actualizar' : 'Refresh');
+}
+document.getElementById('lang').addEventListener('change', e => { lang = e.target.value; applyTranslations(); });
+
+/* =========================
+   Device & Browser detection
+   ========================= */
+function detectDevice() {
+  const ua = navigator.userAgent || navigator.vendor || window.opera;
+  let device = 'Desktop';
+  if (/Mobi|Android|iPhone|iPad|iPod/i.test(ua) || (Math.min(screen.width, screen.height) < 768)) {
+    device = (Math.max(screen.width, screen.height) < 900) ? 'Mobile' : 'Tablet';
+  }
+  // nice readable
+  const browser = (() => {
+    if (/OPR\/|Opera/.test(ua)) return 'Opera';
+    if (/Edg\//.test(ua)) return 'Edge';
+    if (/Chrome\//.test(ua) && !/Edg\//.test(ua)) return 'Chrome';
+    if (/Firefox\//.test(ua)) return 'Firefox';
+    if (/Safari\//.test(ua) && !/Chrome\//.test(ua)) return 'Safari';
+    return 'Unknown';
+  })();
+
+  setText('deviceValue', device);
+  setText('browserValue', browser + ' — ' + (navigator.platform || ''));
+}
+
+/* =========================
+   Map initialization (Leaflet)
+   ========================= */
+let map, marker;
+function initMap() {
+  map = L.map('map', { zoomControl: false }).setView([48.137, 11.575], 5);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+  marker = L.marker([48.137, 11.575]).addTo(map);
+}
+function centerMap(lat, lon, zoom=12){
+  if(!map) initMap();
+  map.setView([lat, lon], zoom);
+  marker.setLatLng([lat, lon]);
+}
+
+/* =========================
+   IP & Geo lookup (client-side)
+   Uses ip-api.com (CORS enabled) - public
+   ========================= */
+async function fetchIPInfo() {
+  try {
+    // 1) Get public IP
+    const ipRes = await fetch("https://api.ipify.org?format=json");
+    const ipData = await ipRes.json();
+
+    // 2) Get location + VPN + ISP
+    const geoRes = await fetch(`https://ipwho.is/${ipData.ip}`);
+    const geo = await geoRes.json();
+
+    if (!geo.success) throw new Error("Geo lookup failed");
+
+    return {
+      query: ipData.ip,
+      city: geo.city,
+      regionName: geo.region,
+      country: geo.country,
+      countryCode: geo.country_code,
+      lat: geo.latitude,
+      lon: geo.longitude,
+      isp: geo.connection?.isp || "Unknown",
+      proxy: geo.security?.proxy || false,
+      hosting: geo.security?.hosting || false
+    };
+
+  } catch (err) {
+    console.error("IP fetch error:", err);
+    return null;
+  }
+}
+
+
+/* =========================
+   Country flag helper (flagcdn)
+   ========================= */
+function setCountryFlag(countryCode, countryName){
+  if(!countryCode){ $('flagImg').style.display='none'; setText('countryName','—'); return; }
+  const code = countryCode.toLowerCase();
+  const url = `https://flagcdn.com/w40/${code}.png`; // small 40px wide
+  $('flagImg').src = url;
+  $('flagImg').style.display = '';
+  setText('countryName', countryName || '');
+}
+
+/* =========================
+   Threat score & VPN heuristics (local heuristics only)
+   - uses ip-api fields: proxy, hosting, as (ASN text) and isp/org
+   - score 0..100 (higher -> more suspicious)
+   ========================= */
+function computeThreatScore(info){
+  // Start at 0 (low)
+  let score = 0;
+  const reasons = [];
+
+  if(info.proxy) { score += 40; reasons.push('proxy flag'); }
+  if(info.hosting) { score += 35; reasons.push('hosting/cloud'); }
+
+  // ASN text often contains cloud provider names or numeric AS
+  const asText = (info.as || '').toLowerCase();
+  const ispText = (info.isp || '').toLowerCase();
+
+  const cloudIndicators = ['amazon', 'aws', 'google', 'microsoft', 'digitalocean', 'ovh', 'azure', 'linode', 'cloudflare', 'hetzner'];
+  for(const c of cloudIndicators){
+    if(asText.includes(c) || ispText.includes(c)){
+      score += 20;
+      reasons.push('cloud-asn: '+c);
+      break;
+    }
+  }
+
+  // If IP is from ISP (consumer) reduce score
+  const consumerIndicators = ['comcast','verizon','telia','vodafone','telefonica','british telecom','spectrum','orange'];
+  for(const c of consumerIndicators){
+    if(ispText.includes(c)){
+      score = Math.max(0, score - 25);
+      reasons.push('consumer-isp: '+c);
+      break;
+    }
+  }
+
+  // Clamp 0..100
+  score = Math.min(100, Math.max(0, Math.round(score)));
+  return { score, reasons };
+}
+
+/* =========================
+   Speed test (simple browser-only approximation)
+   - Downloads several image files from Wikimedia Commons which usually permit cross-origin
+   - Measure time to fetch (arrayBuffer) and compute approximate Mbps
+   - This is approximate — results vary by CDN, browser caching, connection type
+   ========================= */
+async function runSpeedTest(onProgress){
+  // Files chosen to be reasonably large and CORS-friendly (but may still vary). We use multiple sizes.
+  const files = [
+    // 3.7MB
+    'https://upload.wikimedia.org/wikipedia/commons/3/3f/Fronalpstock_big.jpg',
+    // 1.7MB
+    'https://upload.wikimedia.org/wikipedia/commons/5/50/Vd-Orig.png',
+    // 800KB (smaller sample)
+    'https://upload.wikimedia.org/wikipedia/commons/6/6a/JavaScript-logo.png'
+  ];
+
+  // Try sequentially to avoid saturating CPU; run each once
+  let totalBytes = 0;
+  let totalTimeMs = 0;
+  const results = [];
+
+  for(let url of files){
+    try{
+      const start = performance.now();
+      const resp = await fetch(url, {cache: "no-store"});
+      const blob = await resp.arrayBuffer();
+      const end = performance.now();
+      const bytes = blob.byteLength;
+      const ms = Math.max(1, end - start);
+      totalBytes += bytes;
+      totalTimeMs += ms;
+      const mbps = (bytes * 8) / (ms / 1000) / (1024*1024); // Mbps for this file
+      results.push({url, bytes, ms, mbps});
+      if(onProgress) onProgress({url, bytes, ms, mbps, partial:true});
+    }catch(e){
+      console.warn('speed fetch failed', e);
+    }
+  }
+  // combined Mbps
+  const combinedMbps = (totalBytes * 8) / (Math.max(1, totalTimeMs / 1000)) / (1024*1024);
+  return { combinedMbps, totalBytes, totalTimeMs, results };
+}
+
+/* =========================
+   PDF export (jspdf)
+   ========================= */
+async function exportPDF(info, threatObj, speedObj){
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit:'pt', format:'a4' });
+  const margin = 40;
+  let y = 40;
+  doc.setFontSize(18);
+  doc.text(t('title'), margin, y);
+  doc.setFontSize(11);
+  doc.text((new Date()).toLocaleString(), margin, y+18);
+
+  doc.setFontSize(12);
+  y += 40;
+  doc.text(t('PublicIP') + ": " + (info?.query || '—'), margin, y); y+=16;
+  doc.text(t('ISP') + ": " + (info?.isp || '—'), margin, y); y+=16;
+  doc.text(t('CityRegion') + ": " + ((info?.city || '—') + (info?.regionName ? ' / ' + info.regionName : '')), margin, y); y+=16;
+  doc.text(t('Coordinates') + ": " + (info?.lat ? `${info.lat}, ${info.lon}` : '—'), margin, y); y+=18;
+
+  doc.text(t('VPNProxy') + ": " + ((info?.proxy || info?.hosting) ? 'Possible' : 'Not detected'), margin, y); y+=16;
+  doc.text(t('ThreatScore') + ": " + (threatObj?.score ?? '—') + " / 100", margin, y); y+=16;
+
+  if(speedObj){
+    doc.text(t('Download') + ": " + (speedObj.combinedMbps ? speedObj.combinedMbps.toFixed(2)+' Mbps' : '—'), margin, y); y+=16;
+  }
+
+  // Add small note
+  doc.setFontSize(9);
+  doc.text('No data logged. Client-side only. Generated locally in your browser.', margin, y+30);
+
+  // Save
+  doc.save('network-inspector.pdf');
+}
+
+/* =========================
+   Main: orchestrate loading & UI wiring
+   ========================= */
+let lastIPInfo = null;
+let lastThreat = null;
+let lastSpeed = null;
+
+async function refreshAll(){
+  setText('ipValue', 'Loading...');
+  setText('ispValue', '—');
+  setText('locValue', 'Loading...');
+  setText('coordValue', 'Loading...');
+  setText('vpnValue', 'Checking…');
+  setText('threatValue', '—');
+  setText('downloadKbps', '—');
+
+  detectDevice();
+
+  const info = await fetchIPInfo();
+  lastIPInfo = info;
+  if(!info){
+    setText('ipValue', 'Failed to fetch IP info');
+    return;
+  }
+  setText('ipValue', info.query);
+  setText('ispValue', info.isp || info.org || '—');
+  setText('locValue', `${info.city || '—'}${info.regionName ? ', ' + info.regionName : ''} (${info.country || ''})`);
+  setText('coordValue', info.lat && info.lon ? `${info.lat.toFixed(5)}, ${info.lon.toFixed(5)}` : '—');
+
+  // Flag + country
+  setCountryFlag(info.countryCode, info.country);
+
+  // Map center city-level (zoom 12)
+  centerMap(info.lat || 48.137, info.lon || 11.575, 12);
+
+  // VPN / proxy detection
+  if(info.proxy || info.hosting){
+    $('vpnValue').textContent = 'Detected';
+    $('vpnValue').className = 'stat bad';
+  } else {
+    $('vpnValue').textContent = 'Not detected';
+    $('vpnValue').className = 'stat good';
+  }
+
+  // Threat score
+  const threat = computeThreatScore(info);
+  lastThreat = threat;
+  $('threatValue').textContent = `${threat.score} / 100 — ${threat.reasons.join(', ') || 'no flags'}`;
+  if(threat.score >= 60) $('threatValue').className = 'stat bad';
+  else if(threat.score >= 30) $('threatValue').className = 'stat warn';
+  else $('threatValue').className = 'stat good';
+
+  // small metadata
+  $('explainText').textContent = t('Explain') + ": " + (lang === 'de' ? 'Einfache Heuristiken basierend auf API-Feldern (proxy, hosting, ASN).' : (lang === 'es' ? 'Heurísticas simples basadas en campos API (proxy, hosting, ASN).' : 'Simple heuristics based on API fields (proxy, hosting, ASN).'));
+}
+
+/* =========================
+   UI wiring
+   ========================= */
+window.addEventListener('load', async () => {
+  applyTranslations();
+  initMap();
+  detectDevice();
+  await refreshAll();
+});
+
+$('btnRefresh').addEventListener('click', () => refreshAll());
+$('btnCenter').addEventListener('click', () => {
+  if(lastIPInfo) centerMap(lastIPInfo.lat, lastIPInfo.lon, 12);
+});
+$('btnZoomIn').addEventListener('click', () => map.setZoom(Math.min(map.getZoom()+1, 18)));
+$('btnZoomOut').addEventListener('click', () => map.setZoom(Math.max(map.getZoom()-1, 2)));
+
+$('btnSpeed').addEventListener('click', async () => {
+  setText('downloadKbps','Testing…');
+  $('btnSpeed').disabled = true;
+  try{
+    const progressCb = ({url, bytes, ms, mbps}) => {
+      // show latest partial
+      setText('downloadKbps', `${mbps.toFixed(2)} Mbps (sample)`);
+    };
+    const res = await runSpeedTest(progressCb);
+    lastSpeed = res;
+    setText('downloadKbps', res.combinedMbps ? res.combinedMbps.toFixed(2) + ' Mbps' : 'Failed');
+  }catch(e){
+    setText('downloadKbps','Error');
+    console.error(e);
+  } finally {
+    $('btnSpeed').disabled = false;
+  }
+});
+
+$('btnPDF').addEventListener('click', async () => {
+  $('btnPDF').disabled = true;
+  try{
+    await exportPDF(lastIPInfo, lastThreat, lastSpeed);
+  }catch(e){
+    console.error('PDF failed', e);
+    alert('PDF export failed: ' + e);
+  } finally {
+    $('btnPDF').disabled = false;
+  }
+});
+
+/* =========================
+   Initial language setup: detect browser lang if available
+   ========================= */
+(function initLang(){
+  const browserLang = (navigator.language || 'en').slice(0,2);
+  if(['en','de','es'].includes(browserLang)) { lang = browserLang; document.getElementById('lang').value = lang; }
+  applyTranslations();
+})();
+</script>
+</body>
+</html>
